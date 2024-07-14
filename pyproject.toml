@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "playlist-recommendation"
+version = "1.0"
+description = ""
+authors = ["Henrique Lisboa <hlisboasousa@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+flask = "^2.0.0"
+pandas = "^2.0.3"
+flask-cors = "^3.0.10"
+mlxtend = "0.18.0"
+coverage = "^7.3.2"
+lizard = "^1.17.10"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

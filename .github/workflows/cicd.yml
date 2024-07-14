@@ -1,0 +1,181 @@
+name: CI/CD Pipeline
+on:
+  push:
+    branches:
+      - main
+jobs:
+  lizzard-analysis:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: "Setup Python, Poetry and Dependencies"
+      uses: packetcoders/action-setup-cache-python-poetry@main
+      with:
+        python-version: 3.12
+        poetry-version: 1.2.2
+
+    - name: Run Lizzard Analysis
+      run: poetry run lizard api -T cyclomatic_complexity=7
+
+  generate-itemsets:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: "Setup Python, Poetry and Dependencies"
+      uses: packetcoders/action-setup-cache-python-poetry@main
+      with:
+        python-version: 3.12
+        poetry-version: 1.2.2
+
+    - name: Generate Itemsets
+      run: poetry run python models/itemsets_generator.py
+
+  unittests-windows:
+    runs-on: windows-latest
+    needs: [generate-itemsets]
+    steps:
+
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: "Setup Python and Dependencies"
+      uses: actions/setup-python@v3
+      with:
+        python-version: 3.12
+        
+    - name: Install Poetry
+      run: pip install poetry==1.2.2
+      shell: cmd
+    
+    - name: Cache Poetry dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ${{ runner.os == 'Windows' && '~\AppData\Local\pypoetry\Cache' || '~/.cache/pypoetry' }}
+        key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-poetry-
+    - name: Install Dependencies
+      run: poetry install
+      shell: cmd
+
+    - name: Run Python unittests
+      run: poetry run python -m unittest discover ./tests/unittests "*_test.py" --v
+      shell: cmd
+
+  unittests-mac:
+    runs-on: macos-latest
+    needs: [generate-itemsets]
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: "Setup Python and Dependencies"
+      uses: packetcoders/action-setup-cache-python-poetry@main
+      with:
+        python-version: 3.12
+        poetry-version: 1.2.2
+
+    - name: Run Python unittests
+      run: poetry run python -m unittest discover ./tests/unittests "*_test.py" --v
+      shell: bash
+    
+  unittests-ubuntu:
+    runs-on: ubuntu-latest
+    needs: [generate-itemsets]
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: "Setup Python, Poetry and Dependencies"
+      uses: packetcoders/action-setup-cache-python-poetry@main
+      with:
+        python-version: 3.12
+        poetry-version: 1.2.2
+    
+    - name: Run Python unittests
+      run: |
+        poetry run coverage run --source=api/ -m unittest discover ./tests/unittests "*_test.py" --v
+        poetry run coverage report -m
+        poetry run coverage json -o coverage.json
+
+    - name: Upload coverage reports to Codecov
+      uses: codecov/codecov-action@v3
+      env:
+        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+  jest:
+    runs-on: ubuntu-latest
+    needs: [generate-itemsets]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Cache npm dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install npm dependencies
+        run: npm install
+
+      - name: Run Jest tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Run tests
+        run: cd tests/jest && npm run test:jest
+    
+  cypress:
+    runs-on: ubuntu-latest
+    needs: [unittests-ubuntu,unittests-windows,unittests-mac,jest]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Cache Cypress binary
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/Cypress
+          key: ${{ runner.os }}-cypress-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-cypress-
+
+      - name: Install Cypress
+        run: npm install cypress
+
+      - name: Run Cypress tests
+        run: npm run test:cypress
+
+  publish-images:
+    runs-on: ubuntu-latest
+    needs: [cypress]
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build and push images
+      env:
+        DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+      run: |
+        echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+
+        docker buildx create --use
+        docker buildx inspect --bootstrap
+
+        docker buildx build -t hlisboa/playlist-recommendation-api:latest -f dockerfiles/api.dockerfile --push .
+        docker buildx build -t hlisboa/playlist-recommendation-model:latest -f dockerfiles/model.dockerfile --push .
+        docker buildx build -t hlisboa/playlist-recommendation-frontend:latest -f dockerfiles/frontend.dockerfile --push .
